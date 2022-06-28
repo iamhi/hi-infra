@@ -1,31 +1,45 @@
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
+apiVersion: v1
+data:
+  username: root
+  password: rootpassword
+kind: Secret
 metadata:
-  name: mongo-storage-class
-provisioner: microk8s.io/hostpath
-reclaimPolicy: Retain
-volumeBindingMode: Immediate
+  creationTimestamp: null
+  name: mongo-creds
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: mongo-data-pv
+spec:
+  accessModes:
+    - ReadWriteOnce
+  capacity:
+    storage: 2Gi
+  hostPath:
+    path: /data/mongo
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-    name: mongo-persistent-volume-claim
+  name: mongo-data
 spec:
-  accessModes: [ "ReadWriteOnce" ]
-  storageClassName: "mongo-storage-class"
+  accessModes:
+    - ReadWriteOnce
   resources:
     requests:
-      storage: 5Gi
+      storage: 2Gi
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: mongodb
 spec:
+  replicas: 1
   selector:
     matchLabels:
       app: mongodb
-  replicas: 1
+  strategy: {}
   template:
     metadata:
       labels:
@@ -33,27 +47,59 @@ spec:
     spec:
       terminationGracePeriodSeconds: 10
       containers:
-        - name: mongo
-          image: mongo:bionic
-          env:
-            - name: MONGO_INITDB_ROOT_USERNAME
-              value: root
-            - name: MONGO_INITDB_ROOT_PASSWORD
-              value: rootpassword
-          ports:
-            - containerPort: 27017
+      - image: mongo:bionic
+        name: mongo
+        args: ["--dbpath","/data/db"]
+        livenessProbe:
+          exec:
+            command:
+              - mongo
+              - --disableImplicitSessions
+              - --eval
+              - "db.adminCommand('ping')"
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 6
+        readinessProbe:
+          exec:
+            command:
+              - mongo
+              - --disableImplicitSessions
+              - --eval
+              - "db.adminCommand('ping')"
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 6
+        ports:
+          - containerPort: 27017
+        env:
+        - name: MONGO_INITDB_ROOT_USERNAME
+          value: root
+        - name: MONGO_INITDB_ROOT_PASSWORD
+          value: rootpassword
+        volumeMounts:
+        - name: "mongo-data-dir"
+          mountPath: "/data/db"
+      volumes:
+      - name: "mongo-data-dir"
+        persistentVolumeClaim:
+          claimName: "mongo-data"
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: mongo-srv
   labels:
     app: mongo
+  name: mongo-svc
 spec:
   ports:
-  - name: mongo
+  - port: 27017
     protocol: TCP
-    port: 27017
     targetPort: 27017
+    name: mongo
   selector:
     app: mongodb
